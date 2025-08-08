@@ -4,9 +4,16 @@ import { prisma } from '@/lib/prisma';
 import { HfInference } from '@huggingface/inference';
 import { TavilyClient } from 'tavily';
 import { z } from 'zod';
+import type { Prisma } from '@prisma/client';
 
-const hf = new HfInference(process.env.HUGGINGFACE_API_KEY || '');
-const tavily = new TavilyClient({ apiKey: process.env.TAVILY_API_KEY || '' });
+function getHf() {
+  return new HfInference(process.env.HUGGINGFACE_API_KEY || '');
+}
+
+function getTavily() {
+  const key = process.env.TAVILY_API_KEY;
+  return new TavilyClient({ apiKey: key || '' });
+}
 
 export const JobExtractionResultSchema = z.object({
   jobs: z.array(z.object({
@@ -81,7 +88,7 @@ Return ONLY valid JSON in this exact format:
 }`;
 
   try {
-    const response = await hf.textGeneration({
+    const response = await getHf().textGeneration({
       model: 'mistralai/Mixtral-8x7B-Instruct-v0.1',
       inputs: extractionPrompt,
       parameters: {
@@ -100,9 +107,12 @@ Return ONLY valid JSON in this exact format:
     return JobExtractionResultSchema.parse(parsed);
   } catch (error) {
     console.error('Job extraction failed:', error);
-    return { jobs: [], nextUrls: [] };
+    return { jobs: [], nextUrls: [] } as JobExtractionResult;
   }
 }
+
+// Tavily search result type
+type TavilyResult = { url?: string; link?: string };
 
 // Improved Tavily discovery with better filtering
 export async function queryTavilyAndStoreUrls(prompt: string) {
@@ -112,8 +122,9 @@ export async function queryTavilyAndStoreUrls(prompt: string) {
     // Enhanced search query for better job site targeting
     const enhancedPrompt = `${prompt} site:linkedin.com OR site:indeed.com OR site:glassdoor.com OR site:monster.com OR site:ziprecruiter.com OR job listings career opportunities`;
     
+    const tavily = getTavily();
     const results = await tavily.search({ query: enhancedPrompt, max_results: 10 });
-    const searchResults = ((results.results as any[]) || []);
+    const searchResults = (results.results as unknown as TavilyResult[]) || [];
     
     if (!Array.isArray(searchResults)) {
       throw new Error('Invalid Tavily response format');
@@ -134,16 +145,16 @@ export async function queryTavilyAndStoreUrls(prompt: string) {
                url.toLowerCase().includes('job') || 
                url.toLowerCase().includes('career');
       })
-      .map(result => result.url || result.link);
+      .map(result => (result.url || result.link)!)
+      .filter(Boolean);
 
     // Store unique URLs in queue
-    const storedUrls = [];
+    const storedUrls: string[] = [];
     for (const url of [...new Set(validUrls)]) {
       try {
         await prisma.crawlQueue.upsert({
           where: { url },
           update: {},
-          // @ts-ignore depth/domain may not exist if DB not migrated yet
           create: {
             url,
             discoveryMethod: 'tavily',
@@ -176,9 +187,10 @@ export async function queryTavilyAndStoreUrls(prompt: string) {
 
 // Enhanced queue processor with retry logic
 export async function processNextInQueue(maxDepth = Number(process.env.CRAWL_MAX_DEPTH || 2), maxRetries = 3) {
-  // @ts-ignore depth filter guarded
+  const whereClause = { processed: false } as { processed: boolean; depth?: { lte: number } };
+  whereClause.depth = { lte: maxDepth };
   const queueItem = await prisma.crawlQueue.findFirst({ 
-    where: { processed: false, depth: { lte: maxDepth } as any }, 
+    where: whereClause,
     orderBy: [
       { depth: 'asc' }, // Process shallow items first
       { createdAt: 'asc' }
@@ -186,11 +198,11 @@ export async function processNextInQueue(maxDepth = Number(process.env.CRAWL_MAX
   });
 
   if (!queueItem) {
-    return { status: 'idle', remaining: 0 };
+    return { status: 'idle' as const, remaining: 0 };
   }
 
   // Check depth limit
-  if ((queueItem as any).depth >= 3) {
+  if ((queueItem as unknown as { depth?: number }).depth! >= 3) {
     await prisma.crawlQueue.update({
       where: { id: queueItem.id },
       data: { processed: true }
@@ -200,7 +212,7 @@ export async function processNextInQueue(maxDepth = Number(process.env.CRAWL_MAX
       where: { processed: false }
     });
     
-    return { status: 'skipped', remaining };
+    return { status: 'skipped' as const, remaining };
   }
 
   let lastError: Error | null = null;
@@ -231,7 +243,7 @@ export async function processNextInQueue(maxDepth = Number(process.env.CRAWL_MAX
       const extracted = await extractJobsFromHtml(cleanHtml, queueItem.url);
       
       // Store jobs
-      const storedJobs = [];
+      const storedJobs: Array<{ id: string } & Record<string, unknown>> = [];
       for (const jobData of extracted.jobs || []) {
         if (!jobData.title || !jobData.company) continue;
         
@@ -249,7 +261,7 @@ export async function processNextInQueue(maxDepth = Number(process.env.CRAWL_MAX
               sourceUrl: queueItem.url
             }
           });
-          storedJobs.push(job);
+          storedJobs.push(job as unknown as { id: string } & Record<string, unknown>);
         } catch (error) {
           console.warn(`Failed to store job: ${(error as Error).message}`);
         }
@@ -268,12 +280,11 @@ export async function processNextInQueue(maxDepth = Number(process.env.CRAWL_MAX
             await prisma.crawlQueue.upsert({
               where: { url: nextUrl },
               update: {},
-              // @ts-ignore depth/domain additions
               create: {
                 url: nextUrl,
                 discoveryMethod: 'crawler',
                 domain: nextDomain,
-                depth: ((queueItem as any).depth || 0) + 1
+                depth: ((queueItem as unknown as { depth?: number }).depth || 0) + 1
               }
             });
           }
@@ -295,7 +306,7 @@ export async function processNextInQueue(maxDepth = Number(process.env.CRAWL_MAX
       console.log(`✅ Processed ${queueItem.url}: ${storedJobs.length} jobs`);
       
       return {
-        status: 'processed',
+        status: 'processed' as const,
         jobs: storedJobs,
         nextUrls: extracted.nextUrls || [],
         remaining
@@ -322,7 +333,7 @@ export async function processNextInQueue(maxDepth = Number(process.env.CRAWL_MAX
   });
 
   return {
-    status: 'error',
+    status: 'error' as const,
     error: lastError?.message || 'Unknown error',
     remaining
   };
@@ -333,12 +344,11 @@ export async function generateEmbeddingsAndStore(jobId: string, title: string, d
   try {
     const model = process.env.HUGGINGFACE_EMBEDDING_MODEL || 'sentence-transformers/all-MiniLM-L6-v2';
     const input = `${title}\n${description}\n${requirements}`.slice(0, 8000);
-    const embedding = await hf.featureExtraction({ model, inputs: input });
+    const embedding = await getHf().featureExtraction({ model, inputs: input });
     
-    const vector = Array.isArray(embedding[0]) ? embedding[0] : embedding;
+    const vector = Array.isArray(embedding[0]) ? (embedding[0] as number[]) : (embedding as unknown as number[]);
     
-    // @ts-ignore - prisma client needs to be regenerated to include embedding field
-    await prisma.job.update({ where: { id: jobId }, data: { embedding: vector as any } });
+    await prisma.job.update({ where: { id: jobId }, data: { embedding: vector as unknown as Prisma.InputJsonValue } });
     
     // Update job with embedding using raw SQL for pgvector
     if (Array.isArray(vector) && vector.length > 0) {
