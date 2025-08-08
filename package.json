@@ -6,11 +6,13 @@
     "dev": "next dev --turbopack",
     "build": "next build",
     "start": "next start",
-  "lint": "next lint",
-  "prisma:generate": "prisma generate",
-  "prisma:push": "prisma db push",
-  "prisma:migrate": "prisma migrate dev",
-  "test": "jest --passWithNoTests"
+    "lint": "next lint",
+    "prisma:generate": "prisma generate",
+    "prisma:push": "prisma db push",
+    "prisma:migrate": "prisma migrate dev",
+    "test": "jest --passWithNoTests",
+    "crawl:loop": "node -e \"fetch('http://localhost:3000/api/crawl?mode=loop',{method:'POST'}).then(r=>r.text()).then(console.log)\"",
+    "graph:run": "node -e \"fetch('http://localhost:3000/api/discover-and-crawl',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({prompt:'Remote React jobs',maxIterations:50,multiDiscovery:true})}).then(r=>r.text()).then(console.log)\""
   },
   "dependencies": {
     "@huggingface/inference": "^2.8.0",
@@ -36,8 +38,8 @@
     "eslint": "^9",
     "eslint-config-next": "15.4.6",
     "prisma": "^5.18.0",
-  "@types/jest": "^29.5.12",
-  "ts-jest": "^29.2.5",
+    "@types/jest": "^29.5.12",
+    "ts-jest": "^29.2.5",
     "tailwindcss": "^4",
     "typescript": "^5"
   },

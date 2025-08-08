@@ -55,14 +55,18 @@ pnpm dev
 ## 3. API Endpoints
 | Method | Endpoint | Body / Query | Description |
 | ------ | -------- | ------------ | ----------- |
-| POST | /api/discover | { prompt } | Tavily discovery -> enqueue URLs |
-| POST | /api/crawl | - | Process single next URL |
-| POST | /api/discover-and-crawl | { prompt } | Seed + iterative crawl loop |
+| POST | /api/discover | { prompt, mode? } | Tavily discovery -> enqueue URLs. Set mode: 'single' or 'auto' (multi-query via LLM) |
+| POST | /api/crawl | ?mode=loop | Process single next URL. With mode=loop, iterates until idle or cap |
+| POST | /api/discover-and-crawl | { prompt, maxIterations?, multiDiscovery? } | Seed + iterative crawl loop; multiDiscovery uses LLM queries |
 | GET | /api/jobs | q, take | List jobs (text filter) |
 | POST | /api/user-profile | { name?, summary } | Create user profile + embedding |
 | GET | /api/recommendations | userId, limit | Recommend jobs (JS cosine fallback) |
 
-Planned: /api/recommendations/vector using raw SQL cosine on pgvector.
+Chat UI:
+- Navigate to /chat to interact with a lightweight LlamaIndex-style canvas. Prompts supported:
+  - "discover <goal>" or "discover auto <goal>"
+  - "crawl" or "run graph <goal>"
+  - "list jobs [q:term]"
 
 ---
 ## 4. pgvector Integration
@@ -115,6 +119,7 @@ Add Vitest / Jest to cover:
 * User preference embedding refinement
 * Robust logging & tracing (OpenTelemetry)
 * Deduplication / canonicalization of jobs
+* Continuous crawler daemon (cron or worker) calling POST /api/crawl?mode=loop
 
 ---
 ## 10. Disclaimer
