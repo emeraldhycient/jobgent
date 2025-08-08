@@ -1,5 +1,4 @@
 import { StateGraph, Annotation, START, END } from '@langchain/langgraph';
-import { z } from 'zod';
 import { queryTavilyAndStoreUrls, processNextInQueue, generateEmbeddingsAndStore } from './tools';
 
 // Proper state annotation for LangGraph
@@ -11,7 +10,7 @@ const CrawlState = Annotation.Root({
   discovered: Annotation<string[]>({
     reducer: (current, next) => [...(current ?? []), ...(next ?? [])]
   }),
-  processedJobs: Annotation<any[]>({
+  processedJobs: Annotation<Array<{ id: string; title?: string; description?: string; requirements?: string }>>({
     reducer: (current, next) => [...(current ?? []), ...(next ?? [])]
   }),
   queueRemaining: Annotation<number>({
@@ -29,6 +28,8 @@ const CrawlState = Annotation.Root({
 });
 
 type CrawlStateType = typeof CrawlState.State;
+
+type CrawlEvent = { stage: CrawlStateType['phase']; state: CrawlStateType };
 
 // Create workflow - using the correct StateGraph syntax
 const workflow = new StateGraph(CrawlState);
@@ -72,7 +73,7 @@ workflow.addNode('crawl', async (state: CrawlStateType) => {
     }
     
     return {
-      processedJobs: result.jobs || [],
+      processedJobs: (result.jobs as Array<{ id: string; title?: string; description?: string; requirements?: string }>) || [],
       queueRemaining: result.remaining || 0,
       iterations: 1,
       phase: (result.remaining === 0 || state.iterations >= state.maxIterations) 
@@ -95,7 +96,6 @@ workflow.addNode('embed', async (state: CrawlStateType) => {
     
     for (const job of state.processedJobs) {
       if (job && job.id) {
-        const text = `${job.title || ''} ${job.description || ''} ${job.requirements || ''}`;
         await generateEmbeddingsAndStore(job.id, job.title || '', job.description || '', job.requirements || '');
       }
     }
@@ -111,10 +111,12 @@ workflow.addNode('embed', async (state: CrawlStateType) => {
 });
 
 // Define workflow edges using proper LangGraph syntax
-workflow.addEdge(START, 'discover');
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+workflow.addEdge(START as any, 'discover' as any);
 
 workflow.addConditionalEdges(
-  'discover',
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  'discover' as any,
   (state: CrawlStateType) => {
     if (state.errors && state.errors.length > 0) return END;
     if (state.phase === 'crawl') return 'crawl';
@@ -123,7 +125,8 @@ workflow.addConditionalEdges(
 );
 
 workflow.addConditionalEdges(
-  'crawl', 
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  'crawl' as any, 
   (state: CrawlStateType) => {
     if (state.phase === 'embed') return 'embed';
     if (state.phase === 'crawl') return 'crawl';
@@ -131,7 +134,8 @@ workflow.addConditionalEdges(
   }
 );
 
-workflow.addEdge('embed', END);
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+workflow.addEdge('embed' as any, END as any);
 
 export const crawlGraph = workflow.compile();
 
@@ -139,10 +143,10 @@ export const crawlGraph = workflow.compile();
 export async function runDiscoveryAndCrawl(
   prompt: string, 
   maxIterations = 25,
-  onProgress?: (update: any) => void
+  onProgress?: (update: CrawlStateType) => void
 ) {
   try {
-    const initialState = {
+    const initialState: CrawlStateType = {
       prompt,
       phase: 'discover' as const,
       maxIterations,
@@ -151,17 +155,19 @@ export async function runDiscoveryAndCrawl(
       queueRemaining: 0,
       iterations: 0,
       errors: []
-    };
+    } as CrawlStateType;
     
     const stream = await crawlGraph.stream(initialState, {
       streamMode: 'values'
     });
     
-    let finalState = initialState;
+    const events: CrawlEvent[] = [];
     
     for await (const state of stream) {
-      finalState = state;
       onProgress?.(state);
+      
+      // push an event with a stage name for tests/consumers
+      events.push({ stage: state.phase, state });
       
       // Log progress
       console.log(`Phase: ${state.phase}, Iterations: ${state.iterations}/${state.maxIterations}`);
@@ -171,13 +177,7 @@ export async function runDiscoveryAndCrawl(
       }
     }
     
-    return {
-      success: finalState.phase === 'done' && finalState.errors.length === 0,
-      discovered: finalState.discovered,
-      processedJobs: finalState.processedJobs,
-      iterations: finalState.iterations,
-      errors: finalState.errors
-    };
+    return events;
   } catch (error) {
     console.error('Graph execution failed:', error);
     throw new Error(`Crawl pipeline failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
