@@ -141,9 +141,10 @@ export const crawlGraph = workflow.compile();
 
 // Enhanced runner with better error handling and progress tracking
 export async function runDiscoveryAndCrawl(
-  prompt: string, 
+  prompt: string,
   maxIterations = 25,
-  onProgress?: (update: CrawlStateType) => void
+  onProgress?: (update: CrawlStateType) => void,
+  options?: { multiDiscovery?: boolean }
 ) {
   try {
     const initialState: CrawlStateType = {
@@ -156,27 +157,28 @@ export async function runDiscoveryAndCrawl(
       iterations: 0,
       errors: []
     } as CrawlStateType;
-    
+
+    // Optional multi-discovery bootstrap
+    if (options?.multiDiscovery) {
+      const { autoDiscoverAndEnqueue } = await import('./tools');
+      await autoDiscoverAndEnqueue(prompt);
+    }
+
     const stream = await crawlGraph.stream(initialState, {
       streamMode: 'values'
     });
-    
+
     const events: CrawlEvent[] = [];
-    
+
     for await (const state of stream) {
       onProgress?.(state);
-      
-      // push an event with a stage name for tests/consumers
       events.push({ stage: state.phase, state });
-      
-      // Log progress
       console.log(`Phase: ${state.phase}, Iterations: ${state.iterations}/${state.maxIterations}`);
-      
       if (state.errors?.length > 0) {
         console.warn('Errors encountered:', state.errors);
       }
     }
-    
+
     return events;
   } catch (error) {
     console.error('Graph execution failed:', error);

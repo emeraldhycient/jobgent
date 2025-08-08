@@ -375,3 +375,43 @@ export async function generateEmbeddingsAndStore(jobId: string, title: string, d
 export async function remainingQueueCount() {
   return prisma.crawlQueue.count({ where: { processed: false } });
 }
+
+export async function generateDiscoveryPrompts(goal: string) {
+  const base = goal.trim();
+  const prompt = `
+You are an expert research assistant generating concise web search queries to discover job listings.
+
+Goal: "${base}"
+
+Return 5-8 diverse, short queries that will find actual job boards or job listings for this goal. Focus on job-specific phrasing and include terms like "jobs", "hiring", "careers", and the role or tech. Include variations such as remote, junior/senior, and geography if relevant.
+
+Return ONLY a JSON array of strings.`;
+  try {
+    const res = await getHf().textGeneration({
+      model: 'mistralai/Mixtral-8x7B-Instruct-v0.1',
+      inputs: prompt,
+      parameters: { max_new_tokens: 400, temperature: 0.2, return_full_text: false }
+    });
+    const match = res.generated_text.match(/\[[\s\S]*\]/);
+    if (!match) return [base];
+    const arr = JSON.parse(match[0]);
+    if (Array.isArray(arr) && arr.every(v => typeof v === 'string')) {
+      return arr as string[];
+    }
+    return [base];
+  } catch {
+    return [base];
+  }
+}
+
+export async function autoDiscoverAndEnqueue(goal: string) {
+  const queries = await generateDiscoveryPrompts(goal);
+  const aggregate = { totalUrlsStored: 0, totalFound: 0, queueCount: 0, queries };
+  for (const q of queries) {
+    const r = await queryTavilyAndStoreUrls(q);
+    aggregate.totalUrlsStored += r.urls.length;
+    aggregate.totalFound += r.totalFound;
+    aggregate.queueCount = r.queueCount; // last known
+  }
+  return aggregate;
+}
