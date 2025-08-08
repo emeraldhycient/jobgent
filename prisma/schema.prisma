@@ -1,0 +1,48 @@
+// Prisma schema for Job Crawler & Recommendation System
+// Enable pgvector extension manually in your DB: CREATE EXTENSION IF NOT EXISTS vector;
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Job {
+  id           String   @id @default(uuid())
+  title        String
+  company      String
+  location     String?
+  salary       String?
+  description  String
+  requirements String?
+  applyUrl     String
+  applyMethod  String?
+  sourceUrl    String
+  embedding    Json?    // Temporarily store embedding as JSON (number[]). Replace with Vector when pgvector migration added.
+  createdAt    DateTime @default(now())
+}
+
+model CrawlQueue {
+  id              String   @id @default(uuid())
+  url             String   @unique
+  processed       Boolean  @default(false)
+  discoveryMethod String?  // 'tavily' | 'crawler' | 'manual'
+  depth           Int      @default(0)
+  domain          String?
+  createdAt       DateTime @default(now())
+}
+
+model UserProfile {
+  id        String   @id @default(uuid())
+  name      String?
+  summary   String?
+  embedding Json?    // Same temporary JSON storage approach
+  createdAt DateTime @default(now())
+}
+
+// NOTE: A raw migration will add a PostgreSQL vector column to Job:
+// ALTER TABLE "Job" ADD COLUMN IF NOT EXISTS embedding_vector vector(768);
+// This column is not represented in the Prisma model (ignored) and is managed via raw SQL.
